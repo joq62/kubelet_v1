@@ -68,7 +68,7 @@ load_start_service(ServiceId,GitUrl,{ServiceIp,ServicePort},{DnsIp,DnsPort})->
     
     code:add_path(?LOADPACKAGE++ServiceId),
     R=application:start(Service),
-    io:format("~p~n",[{?MODULE,?LINE,ServiceId,R}]),
+  %  io:format("~p~n",[{?MODULE,?LINE,ServiceId,R}]),
     R.    
 
 %% --------------------------------------------------------------------
@@ -82,7 +82,7 @@ load_start_service(ServiceId,GitUrl,{ServiceIp,ServicePort},{DnsIp,DnsPort})->
 %% Description:
 %% Returns: non
 %% --------------------------------------------------------------------
-stop_unload_app(ServiceId)->
+stop_unload_service(ServiceId)->
     Service=list_to_atom(ServiceId),
     R1=application:stop(Service),
     R2=application:unload(Service),    

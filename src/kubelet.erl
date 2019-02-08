@@ -207,7 +207,7 @@ handle_call(Request, From, State) ->
 %%          {stop, Reason, State}            (terminate/2 is called)
 %% --------------------------------------------------------------------
 handle_cast({heart_beat},State) ->
-    io:format("heart_beat ~p~n",[{?MODULE,?LINE,time()}]),
+  %  io:format("heart_beat ~p~n",[{?MODULE,?LINE,time()}]),
     {dns,DnsIp,DnsPort}=State#state.dns_addr,
    if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
    {noreply,State};
