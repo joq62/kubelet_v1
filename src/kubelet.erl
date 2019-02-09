@@ -166,12 +166,13 @@ handle_call({start_service,ServiceId},_From, State) ->
 	    application:unload(Service);
 	false->
 	    ok
-    end,	   
-    Reply=case rpc:call(node(),kubelet_lib,load_start_service,[ServiceId,GitUrl,{NodeIp,NodePort},{DnsIp,DnsPort}]) of
-	      {ok,ok}->
-		  ok;
+    end,
+    StartResult=rpc:call(node(),kubelet_lib,load_start_service,[ServiceId,GitUrl,{NodeIp,NodePort},{DnsIp,DnsPort}]),	
+    Reply=case StartResult of
+	      ok->
+		  {ok,ServiceId};
 	      Err->
-		  {error,[?MODULE,?LINE,Err,ServiceId]}
+		  {error,[?MODULE,?LINE,Err]}
 	  end,
     
     {reply, Reply, State};

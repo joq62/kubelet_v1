@@ -68,7 +68,7 @@ load_start_service(ServiceId,GitUrl,{ServiceIp,ServicePort},{DnsIp,DnsPort})->
     
     code:add_path(?LOADPACKAGE++ServiceId),
     R=application:start(Service),
-  %  io:format("~p~n",[{?MODULE,?LINE,ServiceId,R}]),
+   % io:format("~p~n",[{?MODULE,?LINE,ServiceId,R}]),
     R.    
 
 %% --------------------------------------------------------------------
