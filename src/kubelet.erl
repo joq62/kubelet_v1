@@ -101,6 +101,9 @@ init([]) ->
     {dns,DnsIp,DnsPort}=lists:keyfind(dns,1,InitialInfo),  
     {node_type,NodeType}=lists:keyfind(node_type,1,InitialInfo),  
     {git_url,GitUrl}=lists:keyfind(git_url,1,InitialInfo),
+    {cert,CertFile}=lists:keyfind(cert,1,InitialInfo),
+    {key,KeyFile}=lists:keyfind(key,1,InitialInfo),
+
     KubeletInfo=#kubelet_info{time_stamp="not_initiaded_time_stamp",
 			      service_id = ServiceId,
 			      vsn = Vsn,
@@ -111,9 +114,10 @@ init([]) ->
 			      capabilities=Capabilities,
 			      node_type=NodeType
 			     },    
- 
-
-   {ok, LSock} = gen_tcp:listen(NodePort,?SERVER_SETUP),
+    ok=ssl:start(),
+    {ok, LSock} = ssl:listen(NodePort, [binary,{packet,4},
+				    {certfile,CertFile}, {keyfile,KeyFile}, 
+				      {reuseaddr, true}, {active, true}]),
     Workers=init_workers(LSock,MaxWorkers,[]), % Glurk remove?
     spawn(fun()-> local_heart_beat(?HEARTBEAT_INTERVAL) end), 
     io:format("Started Service  ~p~n",[{?MODULE}]),
@@ -156,7 +160,7 @@ handle_call({loaded_services},_From, State) ->
 
 handle_call({start_service,ServiceId},_From, State) ->
     #kubelet_info{ip_addr=NodeIp,port=NodePort}=State#state.kubelet_info,
-        {dns,DnsIp,DnsPort}=State#state.dns_addr,
+    {dns,DnsIp,DnsPort}=State#state.dns_addr,
     GitUrl=State#state.git_url,
  
     case check_if_loaded(ServiceId) of
@@ -213,6 +217,13 @@ handle_cast({heart_beat},State) ->
    if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
    {noreply,State};
 
+
+handle_cast({log,Msg}, State) ->
+    {dns,DnsIp,DnsPort}=State#state.dns_addr,
+    if_dns:cast("applog",{applog,log,[Msg]},{DnsIp,DnsPort}),
+    {noreply, State};
+
+
 handle_cast({upgrade,_ServiceId,_Vsn}, State) ->
 	    % get tar file from SW repositroy
 	    % create service_info record
@@ -263,6 +274,10 @@ handle_info({'DOWN',Ref,process,Pid,normal},  #state{lSock = LSock,active_worker
     NewState=State#state{active_workers=NewActiveWorkers,workers=NewWorkerList},
    % io:format("DOWN  ~p~n",[{?MODULE,?LINE,NewState}]),
     {noreply, NewState};
+
+handle_info({ssl_closed,{sslsocket,{gen_tcp,Port,tls_connection,undefined},Pid}}, State)->
+   % io:format("Port, Pid  ~p~n",[{?MODULE,?LINE,Port, Pid}]),
+    {noreply, State};
 
 handle_info(Info, State) ->
     io:format("unmatched info ~p~n",[{?MODULE,?LINE,Info}]),
@@ -322,31 +337,28 @@ init_workers(LSock,N,Workers)->
 %% Returns: {ok, NewState}
 %% --------------------------------------------------------------------
 start_worker(ParentPid,LSock)->
-    case gen_tcp:accept(LSock) of 
-	{error,closed}->
-	    {error,closed};
-	{ok, Socket}->	       
-	    ParentPid!{self(),active},
-	    receive
-		{tcp, Socket, RawData}->
-		    case binary_to_term(RawData) of
-			[{M,F,A},?KEY_MSG]->
-			    Reply=rpc:call(node(),M,F,A),
-			    gen_tcp:send(Socket,term_to_binary(Reply));
-			[call,{M,F,A},?KEY_MSG]->
-		%	    io:format(" ~p~n",[{?MODULE,?LINE,{call,{M,F,A}}}]),
-			    Reply=rpc:call(node(),M,F,A),
-			    gen_tcp:send(Socket,term_to_binary(Reply));
-			[cast,{M,F,A},?KEY_MSG]->
+    {ok, Socket} = ssl:transport_accept(LSock),
+    ok= ssl:ssl_accept(Socket),
+    ParentPid!{self(),active},
+    receive
+	{ssl,{sslsocket,_Z1,_Z2},IoList}->
+	    case binary_to_term(iolist_to_binary(IoList)) of
+		[{M,F,A},?KEY_MSG]->
+		    Reply=rpc:call(node(),M,F,A),
+		    ssl:send(Socket,[term_to_binary(Reply)]);
+		[call,{M,F,A},?KEY_MSG]->
+						%	    io:format(" ~p~n",[{?MODULE,?LINE,{call,{M,F,A}}}]),
+		    Reply=rpc:call(node(),M,F,A),
+		    ssl:send(Socket,[term_to_binary(Reply)]);
+		[cast,{M,F,A},?KEY_MSG]->
 			%    io:format(" ~p~n",[{?MODULE,?LINE,{cast,{M,F,A}}}]),
-			    _CastReply=rpc:cast(node(),M,F,A);
-			 %   io:format("~p~n",[{?MODULE,?LINE,CastReply}]);
-			Err->
-			    io:format("Error ~p~n",[{?MODULE,?LINE,Err}])
-		    end;
-		{tcp_closed,Socket} ->
-		    exit
-	    end
+		    _CastReply=rpc:cast(node(),M,F,A);
+						%   io:format("~p~n",[{?MODULE,?LINE,CastReply}]);
+		Err->
+		    io:format("Error ~p~n",[{?MODULE,?LINE,Err}])
+	    end;
+	{tcp_closed,Socket} ->
+	    exit
     end.
 
 %% --------------------------------------------------------------------
