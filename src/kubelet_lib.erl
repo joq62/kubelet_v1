@@ -54,22 +54,39 @@ de_dns_register(DnsInfo,DnsList)->
 %% Description:
 %% Returns: non
 %% --------------------------------------------------------------------
-load_start_service(ServiceId,GitUrl,{ServiceIp,ServicePort},{DnsIp,DnsPort})->
-    os:cmd("rm -r "++?LOADPACKAGE++ServiceId),
-    GitService=GitUrl++?LOADPACKAGE++ServiceId++".git",
+load_start_service(ApplicationId,GitUrl,{NodeIp,NodePort},{DnsIp,DnsPort})->
+    io:format(" ~p~n",[{?MODULE, ?LINE,ApplicationId }]),
+    os:cmd("rm -r "++?LOADPACKAGE++ApplicationId),
+    GitService=GitUrl++?LOADPACKAGE++ApplicationId++".git",
     os:cmd("git clone "++GitService),
 
-    Service=list_to_atom(ServiceId),
-    ok=application:set_env(Service,ip_addr,ServiceIp),
-    ok=application:set_env(Service,port,ServicePort),
-    ok=application:set_env(Service,service_id,ServiceId),
-    ok=application:set_env(Service,dns_ip_addr,DnsIp),
-    ok=application:set_env(Service,dns_port,DnsPort),
-    
-    code:add_path(?LOADPACKAGE++ServiceId),
-    R=application:start(Service),
-   % io:format("~p~n",[{?MODULE,?LINE,ServiceId,R}]),
-    R.    
+    GitJosca=GitUrl++?JOSCA++".git",
+    os:cmd("git clone "++GitJosca),
+    FileName=filename:join([?JOSCA,ApplicationId++".josca"]),
+    Result=case file:consult(FileName) of
+	       {error,Err}->
+		   {error,[?MODULE,?LINE,Err,FileName]},
+		   io:format("~p~n",[{error,[?MODULE,?LINE,Err,FileName]}]),
+		   [{error,[?MODULE,?LINE,Err,FileName]}];
+	       {ok,JoscaInfo}->
+		   Application=list_to_atom(ApplicationId),
+		   ok=application:set_env(Application,ip_addr,NodeIp),
+		   ok=application:set_env(Application,port,NodePort),
+		   ok=application:set_env(Application,application_id,ApplicationId),
+		   ok=application:set_env(Application,dns_ip_addr,DnsIp),
+		   ok=application:set_env(Application,dns_port,DnsPort),
+		   io:format(" ~p~n",[{?MODULE, ?LINE,ApplicationId }]),
+		   {exported_services,ExportedServices}=lists:keyfind(exported_services,1,JoscaInfo),
+		   io:format(" ~p~n",[{?MODULE, ?LINE,exported_services,ExportedServices }]),
+		   ok=application:set_env(Application,exported_services,ExportedServices),
+		   ok=application:set_env(Application,git_url,GitUrl),
+
+		   PathR=code:add_path(?LOADPACKAGE++ApplicationId),
+		   R=application:start(Application),   
+		   code:add_path(?LOADPACKAGE++ApplicationId),
+		   application:start(Application)
+	   end,	    
+    Result.    
 
 %% --------------------------------------------------------------------
 %% Function: 
@@ -82,12 +99,12 @@ load_start_service(ServiceId,GitUrl,{ServiceIp,ServicePort},{DnsIp,DnsPort})->
 %% Description:
 %% Returns: non
 %% --------------------------------------------------------------------
-stop_unload_service(ServiceId)->
-    Service=list_to_atom(ServiceId),
-    R1=application:stop(Service),
-    R2=application:unload(Service),    
-    os:cmd("rm -rf "++?LOADPACKAGE++ServiceId),
-    code:del_path(?LOADPACKAGE++ServiceId),
+stop_unload_service(ApplicationId)->
+    Application=list_to_atom(ApplicationId),
+    R1=application:stop(Application),
+    R2=application:unload(Application),    
+    os:cmd("rm -rf "++?LOADPACKAGE++ApplicationId),
+    code:del_path(?LOADPACKAGE++ApplicationId),
     {R1,R2}.
     
 
