@@ -93,8 +93,6 @@ init([]) ->
     {ok,InitialInfo}=file:consult("kubelet.config"),
     {ip_addr,NodeIp}=lists:keyfind(ip_addr,1,InitialInfo),
     {port,NodePort}=lists:keyfind(port,1,InitialInfo),
-    {service_id,ServiceId}=lists:keyfind(service_id,1,InitialInfo),
-    {vsn,Vsn}=lists:keyfind(vsn,1,InitialInfo),
     {max_workers,MaxWorkers}=lists:keyfind(max_workers,1,InitialInfo),
     {zone,Zone}=lists:keyfind(zone,1,InitialInfo),
     {capabilities,Capabilities}=lists:keyfind(capabilities,1,InitialInfo),
@@ -105,8 +103,8 @@ init([]) ->
     {key,KeyFile}=lists:keyfind(key,1,InitialInfo),
 
     KubeletInfo=#kubelet_info{time_stamp="not_initiaded_time_stamp",
-			      service_id = ServiceId,
-			      vsn = Vsn,
+			      service_id = glurk,
+			      vsn = glurk,
 			      ip_addr=NodeIp,
 			      port=NodePort,
 			      max_workers=MaxWorkers,
@@ -214,7 +212,7 @@ handle_call(Request, From, State) ->
 handle_cast({heart_beat},State) ->
   %  io:format("heart_beat ~p~n",[{?MODULE,?LINE,time()}]),
     {dns,DnsIp,DnsPort}=State#state.dns_addr,
-   if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
+    if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
    {noreply,State};
 
 
