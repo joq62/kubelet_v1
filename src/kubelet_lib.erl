@@ -84,7 +84,7 @@ load_start_service(ApplicationId,GitUrl,{NodeIp,NodePort},{DnsIp,DnsPort})->
 		   PathR=code:add_path(?LOADPACKAGE++ApplicationId),
 		   R=application:start(Application),   
 		   code:add_path(?LOADPACKAGE++ApplicationId),
-		   application:start(Application)
+		   R
 	   end,	    
     Result.    
 
