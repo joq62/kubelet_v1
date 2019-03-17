@@ -20,6 +20,7 @@
 -include("include/dns_data.hrl").
 -include("include/kubelet_data.hrl").
 -include("include/loader.hrl").
+
 %% --------------------------------------------------------------------
 
 %% --------------------------------------------------------------------
@@ -41,7 +42,9 @@
 	 loaded_services/0,
 	 my_ip/0,
 	 start_kubelet/0,
-	 heart_beat/0
+	 heart_beat/0,
+	 register/1,
+	 send/2,send/3
 	]).
 -export([start/0,stop/0]).
 
@@ -74,8 +77,16 @@ my_ip()->
 loaded_services()-> 
     gen_server:call(?MODULE, {loaded_services},infinity).
 
+send(ServiceId,Msg)->
+        gen_server:call(?MODULE, {send,ServiceId,Msg},infinity).
+send(Zone,ServiceId,Msg)->
+    gen_server:call(?MODULE, {send,Zone,ServiceId,Msg},infinity).
+
 
 %%-----------------------------------------------------------------------
+
+register(ServiceId)->
+    gen_server:cast(?MODULE, {register,ServiceId}).
 
 heart_beat()->
     gen_server:cast(?MODULE, {heart_beat}).
@@ -119,10 +130,11 @@ init([]) ->
     Workers=init_workers(LSock,MaxWorkers,[]), % Glurk remove?
     spawn(fun()-> local_heart_beat(?HEARTBEAT_INTERVAL) end), 
     io:format("Started Service  ~p~n",[{?MODULE}]),
-    {ok, #state{git_url=GitUrl,
-		kubelet_info=KubeletInfo,
-		lSock=LSock,max_workers=MaxWorkers,
-		active_workers=0,workers=Workers,dns_list=[],dns_addr={dns,DnsIp,DnsPort}}}.
+    {ok, #state{ service_list=[],
+		 git_url=GitUrl,
+		 kubelet_info=KubeletInfo,
+		 lSock=LSock,max_workers=MaxWorkers,
+		 active_workers=0,workers=Workers,dns_list=[],dns_addr={dns,DnsIp,DnsPort}}}.
 
 %% --------------------------------------------------------------------
 %% Function: handle_call/3
@@ -148,6 +160,31 @@ init([]) ->
 %% 
 %% Returns: non
 %% --------------------------------------------------------------------
+handle_call({send,ServiceId,Msg},_From, State) ->
+    Reply = case [{DnsInfo#dns_info.ip_addr,DnsInfo#dns_info.port}||DnsInfo<-State#state.service_list, ServiceId=:=DnsInfo#dns_info.service_id] of
+		[]->
+		    {error,[?MODULE,?LINE,no_services_available,ServiceId]};
+		
+		[{IpAddr,Port}|_]->
+		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
+	    end,
+    {reply, Reply, State};
+
+
+handle_call({send,Zone,ServiceId,Msg},_From, State) ->
+    Reply = case [{DnsInfo#dns_info.ip_addr,DnsInfo#dns_info.port}||DnsInfo<-State#state.service_list, {ServiceId,Zone}=:={DnsInfo#dns_info.service_id,DnsInfo#dns_info.zone}] of
+		[]->
+		    {error,[?MODULE,?LINE,no_services_available,Zone,ServiceId]};
+		
+		[{IpAddr,Port}|_]->
+		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
+	    end,
+
+    {reply, Reply, State};
+
+
+
+
 handle_call({my_ip},_From, State) ->
     Reply="localhost", % Test only glurk
     {reply, Reply, State};
@@ -209,11 +246,27 @@ handle_call(Request, From, State) ->
 %%          {noreply, State, Timeout} |
 %%          {stop, Reason, State}            (terminate/2 is called)
 %% --------------------------------------------------------------------
+handle_cast({register,ServiceId}, State) ->
+    KubeletInfo=State#state.kubelet_info,
+    IpAddr= KubeletInfo#kubelet_info.ip_addr,
+    Port=KubeletInfo#kubelet_info.port,
+    [Zone]=KubeletInfo#kubelet_info.zone,
+    DnsInfo=#dns_info{time_stamp=na,zone=Zone,  service_id=ServiceId,ip_addr=IpAddr,port=Port},
+    {dns,DnsIp,DnsPort}=State#state.dns_addr,
+    
+    if_dns:cast("dns",{dns,dns_register,[DnsInfo]},{DnsIp,DnsPort}),
+    io:format("register,DnsInfo ~p~n",[{?MODULE,?LINE,DnsInfo}]),
+    {noreply, State};
+
 handle_cast({heart_beat},State) ->
   %  io:format("heart_beat ~p~n",[{?MODULE,?LINE,time()}]),
     {dns,DnsIp,DnsPort}=State#state.dns_addr,
     if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
-   {noreply,State};
+    AvailableServices=if_dns:call("dns",{dns,get_all_instances,[]},{DnsIp,DnsPort}), 
+    NewState=State#state{service_list=AvailableServices},
+    io:format("AvailableServices  ~p~n",[{?MODULE,?LINE,AvailableServices}]),
+
+   {noreply,NewState};
 
 
 handle_cast({log,Msg}, State) ->

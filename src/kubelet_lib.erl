@@ -84,7 +84,7 @@ load_start_service(ApplicationId,GitUrl,{NodeIp,NodePort},{DnsIp,DnsPort})->
 		   PathR=code:add_path(?LOADPACKAGE++ApplicationId),
 		   R=application:start(Application),   
 		   code:add_path(?LOADPACKAGE++ApplicationId),
-		   R
+		   application:start(Application)
 	   end,	    
     Result.    
 
@@ -103,7 +103,6 @@ stop_unload_service(ApplicationId)->
     Application=list_to_atom(ApplicationId),
     R1=application:stop(Application),
     R2=application:unload(Application),    
-    io:format(" ApplicationId,R1,R2 ~p~n",[{?MODULE,?LINE,ApplicationId,R1,R2}]),
     os:cmd("rm -rf "++?LOADPACKAGE++ApplicationId),
     code:del_path(?LOADPACKAGE++ApplicationId),
     {R1,R2}.
