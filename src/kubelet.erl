@@ -59,6 +59,27 @@ start_kubelet()->
     R2=application:start(kubelet),
     io:format("kubelet start result ~p~n",[{R1,R2}]),
     {R1,R2}.
+
+send(ServiceId,Msg) ->
+    Reply = case kubelet_dns:dns(ServiceId) of
+		[]->
+		    {error,[?MODULE,?LINE,no_services_available,ServiceId]};
+		
+		[{IpAddr,Port}|_]->
+		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
+	    end,
+    Reply.
+
+send(Zone,ServiceId,Msg) ->
+    Reply = case kubelet_dns:dns(Zone,ServiceId) of
+		[]->
+		    {error,[?MODULE,?LINE,no_services_available,Zone,ServiceId]};
+		
+		[{IpAddr,Port}|_]->
+		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
+	    end,
+    Reply.
+
     
 start()-> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 stop()-> gen_server:call(?MODULE, {stop},infinity).
@@ -77,12 +98,6 @@ my_ip()->
 loaded_services()-> 
     gen_server:call(?MODULE, {loaded_services},infinity).
 
-send(ServiceId,Msg)->
-        gen_server:call(?MODULE, {send,ServiceId,Msg},infinity).
-send(Zone,ServiceId,Msg)->
-    gen_server:call(?MODULE, {send,Zone,ServiceId,Msg},infinity).
-
-
 %%-----------------------------------------------------------------------
 
 register(ServiceId)->
@@ -100,6 +115,10 @@ heart_beat()->
 %%          {stop, Reason}
 %% --------------------------------------------------------------------
 init([]) ->
+    
+    % Init the local dns table - implemented with ets
+    kubelet_dns:init_dns_table(),
+
     % config data 
     {ok,InitialInfo}=file:consult("kubelet.config"),
     {ip_addr,NodeIp}=lists:keyfind(ip_addr,1,InitialInfo),
@@ -160,31 +179,6 @@ init([]) ->
 %% 
 %% Returns: non
 %% --------------------------------------------------------------------
-handle_call({send,ServiceId,Msg},_From, State) ->
-    Reply = case [{DnsInfo#dns_info.ip_addr,DnsInfo#dns_info.port}||DnsInfo<-State#state.service_list, ServiceId=:=DnsInfo#dns_info.service_id] of
-		[]->
-		    {error,[?MODULE,?LINE,no_services_available,ServiceId]};
-		
-		[{IpAddr,Port}|_]->
-		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
-	    end,
-    {reply, Reply, State};
-
-
-handle_call({send,Zone,ServiceId,Msg},_From, State) ->
-    Reply = case [{DnsInfo#dns_info.ip_addr,DnsInfo#dns_info.port}||DnsInfo<-State#state.service_list, {ServiceId,Zone}=:={DnsInfo#dns_info.service_id,DnsInfo#dns_info.zone}] of
-		[]->
-		    {error,[?MODULE,?LINE,no_services_available,Zone,ServiceId]};
-		
-		[{IpAddr,Port}|_]->
-		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
-	    end,
-
-    {reply, Reply, State};
-
-
-
-
 handle_call({my_ip},_From, State) ->
     Reply="localhost", % Test only glurk
     {reply, Reply, State};
@@ -254,6 +248,8 @@ handle_cast({register,ServiceId}, State) ->
     DnsInfo=#dns_info{time_stamp=na,zone=Zone,  service_id=ServiceId,ip_addr=IpAddr,port=Port},
     {dns,DnsIp,DnsPort}=State#state.dns_addr,
     
+    %DnsInfo=?DNS_INFO(Zone,ServiceId,IpAddr,Port,time_stamp,schedule),
+    
     if_dns:cast("dns",{dns,dns_register,[DnsInfo]},{DnsIp,DnsPort}),
     io:format("register,DnsInfo ~p~n",[{?MODULE,?LINE,DnsInfo}]),
     {noreply, State};
@@ -261,10 +257,33 @@ handle_cast({register,ServiceId}, State) ->
 handle_cast({heart_beat},State) ->
   %  io:format("heart_beat ~p~n",[{?MODULE,?LINE,time()}]),
     {dns,DnsIp,DnsPort}=State#state.dns_addr,
-    if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
+    kubelet:send("controller",{controller,node_register,[State#state.kubelet_info]}),
+
+ %   if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
+
     AvailableServices=if_dns:call("dns",{dns,get_all_instances,[]},{DnsIp,DnsPort}), 
-    NewState=State#state{service_list=AvailableServices},
-    io:format("AvailableServices  ~p~n",[{?MODULE,?LINE,AvailableServices}]),
+    % Convert DnsInfo -> ServiceInfo
+    FilteredServices=[{DnsInfo#dns_info.zone,DnsInfo#dns_info.service_id,DnsInfo#dns_info.ip_addr,DnsInfo#dns_info.port}||DnsInfo<-AvailableServices],
+    LocalServiceList=ets:tab2list(?DNS_TABLE),
+    
+    {Added,Removed}=kubelet_dns:diff_dns(LocalServiceList,FilteredServices),
+    case Added of
+	[]->
+	    ok;
+	Added->
+	    [kubelet_dns:update_dns_table(ServiceInfo)||ServiceInfo<-Added]
+    end,
+    case Removed of
+	[]->
+	    ok;
+	Removed->
+	    [kubelet_dns:delete(ServiceInfo)||ServiceInfo<-Removed]
+    end,
+    io:format("Added  ~p~n",[{?MODULE,?LINE,Added}]),
+    io:format("Removed  ~p~n",[{?MODULE,?LINE,Removed}]),
+    
+    NewState=State#state{service_list=FilteredServices},
+    io:format("AvailableServices  ~p~n",[{?MODULE,?LINE,FilteredServices}]),
 
    {noreply,NewState};
 
