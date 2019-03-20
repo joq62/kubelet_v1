@@ -11,6 +11,9 @@
 %% --------------------------------------------------------------------
 %% Include files
 %% --------------------------------------------------------------------
+-include("interface/if_controller.hrl").
+-include("interface/if_dns.hrl").
+
 -include("kubelet/src/kubelet_local.hrl").
 
 -include("include/trace_debug.hrl").
@@ -43,7 +46,7 @@
 	 my_ip/0,
 	 start_kubelet/0,
 	 heart_beat/0,
-	 register/1,
+	 register/1,de_register/1,
 	 send/2,send/3
 	]).
 -export([start/0,stop/0]).
@@ -60,27 +63,35 @@ start_kubelet()->
     io:format("kubelet start result ~p~n",[{R1,R2}]),
     {R1,R2}.
 
-send(ServiceId,Msg) ->
-    Reply = case kubelet_dns:dns(ServiceId) of
-		[]->
-		    {error,[?MODULE,?LINE,no_services_available,ServiceId]};
-		
-		[{IpAddr,Port}|_]->
-		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
-	    end,
+send(ServiceId,{M,F,A}) ->
+    Reply= case ServiceId of
+	       "kubelet"->
+		   rpc:call(node(),M,F,A);
+	       ServiceId->
+		   case kubelet_dns:dns(ServiceId) of
+		       []->
+			   {error,[?MODULE,?LINE,no_services_available,ServiceId]};
+		       [{IpAddr,Port}|_]->
+			   ssl_lib:ssl_call([{IpAddr,Port}],{M,F,A})
+		   end
+	   end,
     Reply.
 
-send(Zone,ServiceId,Msg) ->
-    Reply = case kubelet_dns:dns(Zone,ServiceId) of
-		[]->
-		    {error,[?MODULE,?LINE,no_services_available,Zone,ServiceId]};
-		
-		[{IpAddr,Port}|_]->
-		        ssl_lib:ssl_call([{IpAddr,Port}],Msg)
-	    end,
+send(Zone,ServiceId,{M,F,A}) ->
+    Reply= case ServiceId of
+	       "kubelet"->
+		   rpc:call(node(),M,F,A);
+	       ServiceId->
+		   case kubelet_dns:dns(Zone,ServiceId) of
+		       []->
+			   {error,[?MODULE,?LINE,no_services_available,Zone,ServiceId]};
+		       
+		       [{IpAddr,Port}|_]->
+			   ssl_lib:ssl_call([{IpAddr,Port}],{M,F,A})
+		   end
+	   end,
     Reply.
-
-    
+      
 start()-> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 stop()-> gen_server:call(?MODULE, {stop},infinity).
 
@@ -102,6 +113,8 @@ loaded_services()->
 
 register(ServiceId)->
     gen_server:cast(?MODULE, {register,ServiceId}).
+de_register(ServiceId)->
+    gen_server:cast(?MODULE, {de_register,ServiceId}).
 
 heart_beat()->
     gen_server:cast(?MODULE, {heart_beat}).
@@ -247,17 +260,30 @@ handle_cast({register,ServiceId}, State) ->
     [Zone]=KubeletInfo#kubelet_info.zone,
     DnsInfo=#dns_info{time_stamp=na,zone=Zone,  service_id=ServiceId,ip_addr=IpAddr,port=Port},
     {dns,DnsIp,DnsPort}=State#state.dns_addr,
+    kubelet:send("dns",?DnsRegister(DnsInfo)),
+
+%    io:format("register,DnsInfo ~p~n",[{?MODULE,?LINE,DnsInfo}]),
+    {noreply, State};
+
+handle_cast({de_register,ServiceId}, State) ->
+    KubeletInfo=State#state.kubelet_info,
+    IpAddr= KubeletInfo#kubelet_info.ip_addr,
+    Port=KubeletInfo#kubelet_info.port,
+    [Zone]=KubeletInfo#kubelet_info.zone,
+    DnsInfo=#dns_info{time_stamp=na,zone=Zone,  service_id=ServiceId,ip_addr=IpAddr,port=Port},
+    {dns,DnsIp,DnsPort}=State#state.dns_addr,
     
     %DnsInfo=?DNS_INFO(Zone,ServiceId,IpAddr,Port,time_stamp,schedule),
-    
-    if_dns:cast("dns",{dns,dns_register,[DnsInfo]},{DnsIp,DnsPort}),
-    io:format("register,DnsInfo ~p~n",[{?MODULE,?LINE,DnsInfo}]),
+    kubelet:send("dns",?DeDnsRegister(DnsInfo)),
+ %   if_dns:cast("dns",{dns,de_dns_register,[DnsInfo]},{DnsIp,DnsPort}),
+%    io:format("de_register,DnsInfo ~p~n",[{?MODULE,?LINE,DnsInfo}]),
     {noreply, State};
 
 handle_cast({heart_beat},State) ->
   %  io:format("heart_beat ~p~n",[{?MODULE,?LINE,time()}]),
     {dns,DnsIp,DnsPort}=State#state.dns_addr,
-    kubelet:send("controller",{controller,node_register,[State#state.kubelet_info]}),
+ %   kubelet:send("controller",{controller,node_register,[State#state.kubelet_info]}),
+    kubelet:send("controller",?NodeRegister(State#state.kubelet_info)),
 
  %   if_dns:cast("controller",{controller,node_register,[State#state.kubelet_info]},{DnsIp,DnsPort}),
 
@@ -279,11 +305,11 @@ handle_cast({heart_beat},State) ->
 	Removed->
 	    [kubelet_dns:delete(ServiceInfo)||ServiceInfo<-Removed]
     end,
-    io:format("Added  ~p~n",[{?MODULE,?LINE,Added}]),
-    io:format("Removed  ~p~n",[{?MODULE,?LINE,Removed}]),
+ %   io:format("Added  ~p~n",[{?MODULE,?LINE,Added}]),
+  %  io:format("Removed  ~p~n",[{?MODULE,?LINE,Removed}]),
     
     NewState=State#state{service_list=FilteredServices},
-    io:format("AvailableServices  ~p~n",[{?MODULE,?LINE,FilteredServices}]),
+ %   io:format("AvailableServices  ~p~n",[{?MODULE,?LINE,FilteredServices}]),
 
    {noreply,NewState};
 
@@ -414,8 +440,10 @@ start_worker(ParentPid,LSock)->
 	{ssl,{sslsocket,_Z1,_Z2},IoList}->
 	    case binary_to_term(iolist_to_binary(IoList)) of
 		[{M,F,A},?KEY_MSG]->
-		    Reply=rpc:call(node(),M,F,A),
+		    Reply=rpc:call(node(),erlang,apply,[M,F,A]),
+		 %   Reply=rpc:call(node(),M,F,A),
 		    ssl:send(Socket,[term_to_binary(Reply)]);
+		%% To be deleted
 		[call,{M,F,A},?KEY_MSG]->
 						%	    io:format(" ~p~n",[{?MODULE,?LINE,{call,{M,F,A}}}]),
 		    Reply=rpc:call(node(),M,F,A),
@@ -423,7 +451,7 @@ start_worker(ParentPid,LSock)->
 		[cast,{M,F,A},?KEY_MSG]->
 			%    io:format(" ~p~n",[{?MODULE,?LINE,{cast,{M,F,A}}}]),
 		    _CastReply=rpc:cast(node(),M,F,A);
-						%   io:format("~p~n",[{?MODULE,?LINE,CastReply}]);
+		%  End to be deleted io:format("~p~n",[{?MODULE,?LINE,CastReply}]);
 		Err->
 		    io:format("Error ~p~n",[{?MODULE,?LINE,Err}])
 	    end;
